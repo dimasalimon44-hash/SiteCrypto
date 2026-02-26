@@ -81,6 +81,7 @@ async def main() -> None:
         asyncio.create_task(_a._bybit_task(), name="bybit"),
         asyncio.create_task(_a._bingx_task(), name="bingx"),
         asyncio.create_task(_a._aggregator_task(), name="aggregator"),
+        asyncio.create_task(_a._next_funding_task(), name="next-funding"),
         asyncio.create_task(_a._mexc_intervals_refresher(), name="mexc-intervals"),
     ]
     logger.info("Collector tasks started: %s", [t.get_name() for t in tasks])

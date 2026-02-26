@@ -185,7 +185,8 @@ def __getattr__(name: str) -> Any:
     called (only at runtime, never at module load time).
     """
     if name in ("updater_loop", "compute_once",
-                "_mexc_task", "_bybit_task", "_bingx_task", "_aggregator_task"):
+                "_mexc_task", "_bybit_task", "_bingx_task", "_aggregator_task",
+                "_next_funding_task"):
         from app import main as _main
         return getattr(_main, name)
     raise AttributeError(f"module 'app' has no attribute {name!r}")

@@ -42,6 +42,8 @@ from app.sse import _broadcast_sse, _redis_sse_subscriber
 from app.store import (
     CACHE,
     CACHE_LOCK,
+    FUNDING_LOCK,
+    FUNDING_STORE,
     LIVE_ROWS,
     PAIR_HISTORY_MAX,
     _DATA_CACHE,
@@ -379,6 +381,40 @@ async def _aggregator_task() -> None:
             except Exception:
                 logger.exception("[aggregator] task error")
         await asyncio.sleep(1.0)
+
+
+async def _next_funding_task() -> None:
+    """Refresh FUNDING_STORE from cached live rows every 15 minutes.
+
+    Next funding timestamps change at most once per funding interval (typically
+    every 8 hours), so there is no need to recompute them on every aggregation
+    cycle.  This task runs independently at a much lower cadence to reduce load.
+
+    An initial delay of 2×REFRESH_SEC lets the exchange tasks populate live rows
+    before the first funding store rebuild.
+    """
+    await asyncio.sleep(float(CFG.get("refresh_sec", REFRESH_SEC)) * 2)
+    while True:
+        try:
+            live = await _rlive_all()
+            now_ms = int(time.time() * 1000)
+            funding: Dict[str, int] = {}
+            for r in live.values():
+                for ex_key, ts_key in (("buy_ex", "buy_next_ts_ms"), ("sell_ex", "sell_next_ts_ms")):
+                    ex = str(r.get(ex_key) or "").lower()
+                    ts = int(r.get(ts_key) or 0)
+                    if ex and ts > now_ms:
+                        if ex not in funding or ts < funding[ex]:
+                            funding[ex] = ts
+            # Build the new dict fully before acquiring the lock so that the
+            # store is never empty from a reader's perspective.
+            with FUNDING_LOCK:
+                FUNDING_STORE.clear()
+                FUNDING_STORE.update(funding)
+            logger.info("[next-funding] store updated: %d exchanges", len(funding))
+        except Exception:
+            logger.exception("[next-funding] task error")
+        await asyncio.sleep(900)  # 15 minutes
 
 
 async def updater_loop() -> None:
