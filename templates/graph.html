@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet"/>
+<title>Grafic – Arbitrage Insights</title>
+<link rel="stylesheet" href="/static/css/graph.css?v={{ sv }}"/>
+</head>
+<body><div class='wrap'>
+<div class='card'><a class='back-link' href='/'>&larr; Back</a><div id='title'>Grafic</div><div id='meta'></div></div>
+<div class='card'><div class='calc-row'>
+<label>Entry Buy<input id='entryBuy' type='number' step='any' placeholder='0.00'></label>
+<label>Entry Sell<input id='entrySell' type='number' step='any' placeholder='0.00'></label>
+<label>Leverage<input id='lev' type='number' step='1' value='1' placeholder='1'></label>
+<span id='pnl'></span>
+</div></div>
+<div class='card'><canvas id='cv' width='1050' height='340'></canvas></div>
+</div>
+<script src="/static/js/graph.js?v={{ sv }}"></script>
+</body>
+</html>

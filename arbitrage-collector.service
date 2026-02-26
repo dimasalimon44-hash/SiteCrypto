@@ -1,0 +1,21 @@
+[Unit]
+Description=Arbitrage Insights Collector (exchange data fetcher)
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/brain-acad-lab-2/arbitrage_dashboard
+ExecStart=/root/brain-acad-lab-2/arbitrage_dashboard/.venv/bin/python collector.py
+Restart=always
+RestartSec=5
+Environment=ENV=production
+Environment=REDIS_URL=redis://localhost:6379/0
+Environment=REFRESH_SEC=3
+Environment=LOG_LEVEL=INFO
+Environment=TELEGRAM_BOT_TOKEN=ЗАМЕНИТЕ_НА_ТОКЕН_БОТА
+Environment=TELEGRAM_BOT_USERNAME=arbitrageinsights_bot
+
+[Install]
+WantedBy=multi-user.target

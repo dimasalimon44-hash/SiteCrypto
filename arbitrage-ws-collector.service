@@ -1,0 +1,20 @@
+[Unit]
+Description=Arbitrage WebSocket Collector
+Documentation=https://github.com/joik1234556/brain-acad-lab-2
+After=network.target redis.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/brain-acad-lab-2/arbitrage_dashboard
+ExecStart=/root/brain-acad-lab-2/arbitrage_dashboard/.venv/bin/python ws_collector.py
+Restart=always
+RestartSec=5
+Environment=LOG_LEVEL=INFO
+Environment=REDIS_URL=redis://localhost:6379/0
+Environment=TELEGRAM_BOT_TOKEN=ЗАМЕНИТЕ_НА_ТОКЕН_БОТА
+Environment=TELEGRAM_BOT_USERNAME=arbitrageinsights_bot
+Environment=SNAPSHOT_THROTTLE_SEC=0.3
+
+[Install]
+WantedBy=multi-user.target
