@@ -1,10 +1,13 @@
 """Shared exchange utilities: type helpers, symbol normalisers, HTTP fetch."""
+import logging
 import math
 from typing import Any, Dict, List, Optional
 
 import aiohttp
 
 from app.config import HTTP_TIMEOUT
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -78,15 +81,42 @@ def _match_symbol_entry(items: List[dict], variants: List[str]) -> Optional[dict
     return None
 
 
+# Earliest plausible Unix timestamp in seconds (~2001-09-09).  Values at or
+# below this threshold are considered invalid or out-of-range.
+_TS_MIN_SEC: float = 1e9
+
+# Boundary above which a numeric timestamp is in milliseconds, not seconds.
+_TS_MS_BOUNDARY: float = 1e12
+
+
+def normalize_timestamp(ts: Any) -> float:
+    """Return *ts* as a UNIX timestamp in **seconds** (float).
+
+    Exchanges return ``nextFundingTime`` in different units:
+    * milliseconds (value > _TS_MS_BOUNDARY, e.g. 1_708_963_200_000)
+    * seconds      (value > _TS_MIN_SEC,    e.g. 1_708_963_200)
+
+    This helper always returns seconds, logging the conversion at DEBUG level
+    so that raw vs normalised values are traceable:
+
+        Raw: 1708963200000  → Normalized: 1708963200
+
+    Returns ``math.nan`` for invalid / out-of-range input.
+    """
+    val = to_float(ts)
+    if not (math.isfinite(val) and val > 0):
+        return math.nan
+    if val > _TS_MS_BOUNDARY:  # milliseconds → seconds
+        normalized = val / 1000.0
+        logger.debug("[normalize_timestamp] Raw: %.0f → Normalized: %.0f", val, normalized)
+        val = normalized
+    return val if val > _TS_MIN_SEC else math.nan
+
+
 def _pick_ts(d: dict, keys: List[str]) -> float:
     for key in keys:
-        raw = d.get(key)
-        val = to_float(raw)
-        if not math.isfinite(val):
-            continue
-        if val > 1e12:
-            val /= 1000.0
-        if val > 1e9:
+        val = normalize_timestamp(d.get(key))
+        if math.isfinite(val):
             return val
     return math.nan
 

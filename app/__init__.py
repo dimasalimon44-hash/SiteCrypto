@@ -116,6 +116,7 @@ from app.exchanges import (  # noqa: E402
     is_pos,
     normalize_usdt,
     normalize_symbol_key,
+    normalize_timestamp,
     _as_list,
     _pick_float,
     _match_symbol_entry,
