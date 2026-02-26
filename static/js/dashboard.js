@@ -6,10 +6,11 @@ function _readJsonEl(id){try{const el=document.getElementById(id);return el?JSON
 // ── Funding countdown: one global tick per second, independent of API polling ──
 // Timestamps are stored as data-next-funding-buy / data-next-funding-sell on each <tr>.
 const EMPTY_TIMER='--:--:--';
+const rowMap=new Map();
 function _fmtTime(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}
 setInterval(function(){
   const now=Date.now();
-  document.querySelectorAll('#tbody tr[data-key]').forEach(function(tr){
+  rowMap.forEach(function(tr){
     const buyTs=Number(tr.dataset.nextFundingBuy)||0;
     const sellTs=Number(tr.dataset.nextFundingSell)||0;
     const spans=tr.querySelectorAll('[data-col="feta"] span');
@@ -246,18 +247,19 @@ rows=applyFilters(rows);
 sortRows(rows);
 refreshSortIndicators();
 const tb=document.getElementById('tbody');
-if(!rows.length){tb.innerHTML=`<tr class="empty-row"><td colspan="10">${(I18N[STATE.lang]||I18N.ru).notFound}</td></tr>`; return;}
+[...tb.querySelectorAll('tr:not([data-key])')].forEach(tr=>tr.remove());
+if(!rows.length){rowMap.forEach(tr=>{if(tr.parentNode===tb)tb.removeChild(tr);}); const e=document.createElement('tr'); e.innerHTML=`<td colspan="10" class="empty-row">${(I18N[STATE.lang]||I18N.ru).notFound}</td>`; tb.appendChild(e); return;}
 const top=rows[0];
 const alertKey=`${top.symbol}|${top.buy_ex}|${top.sell_ex}|${(top.spread||0).toFixed(4)}`;
 if(alertKey!==LAST_ALERT){LAST_ALERT=alertKey; playAlert();}
 
 const split=(a,b,col='',lbl='')=>`<td class='split-cell mono' data-col='${col}' data-label='${lbl}'><div class='line'>${a}</div><div class='line'>${b}</div></td>`;
-const existingRows=new Map([...tb.querySelectorAll('tr[data-key]')].map(tr=>[tr.dataset.key,tr]));
-[...tb.querySelectorAll('tr:not([data-key])')].forEach(tr=>tr.remove());
+const currentKeys=new Set();
 rows.forEach(r=>{
   const rKey=pairKey(r);
+  currentKeys.add(rKey);
   const pin=isPinnedPair(r);
-  let tr=existingRows.get(rKey);
+  let tr=rowMap.get(rKey);
   if(tr){
     // Existing row: update only dynamic cells; keep timer spans intact to avoid flicker
     tr.className=pin?'pinned':'';
@@ -270,10 +272,9 @@ rows.forEach(r=>{
     const spreadCell=tr.querySelector('[data-col="spread"]'); if(spreadCell){const sp=spreadCell.querySelector('.spread-pill'); if(sp){sp.className=`spread-pill ${spreadClass(r.spread)}`; sp.textContent=fmtPct(r.spread,2);}}
     const volCell=tr.querySelector('[data-col="vol"]'); if(volCell){const ls=volCell.querySelectorAll('.line'); if(ls[0])ls[0].textContent=fmtUsd(r.buy_vol); if(ls[1])ls[1].textContent=fmtUsd(r.sell_vol);}
     tb.appendChild(tr);
-    existingRows.delete(rKey);
     return;
   }
-  // New row: build full DOM once, then store timestamps for the global timer
+  // New row: build full DOM once, register in rowMap so it is never recreated
   tr=document.createElement('tr'); tr.dataset.key=rKey;
   tr.className=pin?'pinned':'';
   const lbuy=logoFor(r.buy_ex);
@@ -294,13 +295,13 @@ rows.forEach(r=>{
     <td data-col='graf' data-label=''><a class='btn' style='padding:4px 8px;font-size:12px' href='/graph?pair_key=${encodeURIComponent(pairKey(r))}' target='_blank' rel='noopener'>Grafic</a></td>
   `;
   tr.querySelector('.fav').onclick=()=>togglePinnedPair(r);
-  // Store timestamps for the global funding countdown timer
+  // Store funding timestamps once; the global timer reads them every second
   tr.dataset.nextFundingBuy=r.buy_next_ts_ms||0;
   tr.dataset.nextFundingSell=r.sell_next_ts_ms||0;
   tb.appendChild(tr);
-  existingRows.delete(rKey);
+  rowMap.set(rKey,tr);
 });
-existingRows.forEach(tr=>tr.remove());
+rowMap.forEach((tr,key)=>{if(!currentKeys.has(key)&&tr.parentNode===tb)tb.removeChild(tr);});
 }
 
 let _lastDataEtag='';
