@@ -1,10 +1,13 @@
 """Funding-related calculations: intervals, ETAs, spread math, best_pairs."""
+import logging
 import math
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from models import MarketRow
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +102,34 @@ def funding_eta_str(next_ts: float, fallback_hours: int = 8) -> str:
 # Spread / pairs math
 # ---------------------------------------------------------------------------
 
+_DEFAULT_INTERVAL_H = 8  # safe default when interval is unknown
+
+
+def _normalize_to_hourly(rate: float, interval_h: int) -> float:
+    """Return the per-hour equivalent of *rate* for a given funding *interval_h*.
+
+    Different exchanges settle funding at different cadences (1h, 4h, 8h …).
+    To compare two rates fairly, both must be expressed on the same time unit
+    before computing a spread.
+
+    Unit safety guard: if ``abs(rate) > 1`` the value is almost certainly
+    expressed as a percentage in whole-number form (e.g. 150 meaning 150%
+    rather than 1.5 as a decimal fraction).  Divide by 100 to normalise.
+
+    Returns 0.0 for invalid inputs instead of raising.
+    """
+    if not math.isfinite(rate):
+        return 0.0
+    iv = interval_h
+    if not iv or iv <= 0:
+        logger.warning("[funding] missing/zero interval — defaulting to %dh", _DEFAULT_INTERVAL_H)
+        iv = _DEFAULT_INTERVAL_H
+    # Unit safety: values with abs > 1 are almost certainly in percent form
+    if abs(rate) > 1:
+        rate = rate / 100.0
+    return rate / iv
+
+
 def _adjusted_fund(rate: float, next_ts: float, interval_h: int) -> float:
     """Return funding rate scaled by the fraction of the current period remaining.
 
@@ -163,7 +194,12 @@ def best_pairs(rows: List[MarketRow], min_vol: float) -> List[Dict[str, Any]]:
                 continue
             adj_buy = _adjusted_fund(buy.fund_rate, buy.next_funding_ts, buy.funding_interval_h)
             adj_sell = _adjusted_fund(sell.fund_rate, sell.next_funding_ts, sell.funding_interval_h)
-            fund_spread = adj_sell - adj_buy if math.isfinite(adj_buy) and math.isfinite(adj_sell) else math.nan
+            # Normalize both rates to per-hour before computing the spread so
+            # that exchanges with different funding intervals (1h, 4h, 8h …)
+            # are compared on the same time-unit basis.
+            hourly_buy = _normalize_to_hourly(buy.fund_rate, buy.funding_interval_h)
+            hourly_sell = _normalize_to_hourly(sell.fund_rate, sell.funding_interval_h)
+            fund_spread = hourly_sell - hourly_buy
             out.append({
                 "spread": spread,
                 "pair_key": "",
