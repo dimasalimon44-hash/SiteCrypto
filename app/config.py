@@ -25,6 +25,7 @@ USERS_DB_PATH = os.path.join(BASE_DIR, "users.db.enc")
 REFRESH_SEC = int(os.getenv("REFRESH_SEC", "3"))
 CYCLE_WARN_MS = 2000
 COLLECTOR_ONLY: bool = os.getenv("COLLECTOR_ONLY") == "1"
+RUN_UPDATER: bool = os.getenv("RUN_UPDATER", "0") == "1"
 DEFAULT_MIN_VOL_USD = 5_000_000.0
 DEFAULT_MIN_SPREAD = 0.0
 HTTP_TIMEOUT = 12

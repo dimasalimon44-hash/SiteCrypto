@@ -24,6 +24,7 @@ from app.config import (
     ASSETS_DIR,
     CFG,
     COLLECTOR_ONLY,
+    RUN_UPDATER,
     CYCLE_WARN_MS,
     DEFAULT_EXCH_ENABLED,
     DEFAULT_MIN_SPREAD,
@@ -299,13 +300,13 @@ async def lifespan(_: FastAPI):
     await _redis_connect()
     connector = aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)
     _app_pkg._HTTP_SESSION = aiohttp.ClientSession(connector=connector)
-    if not COLLECTOR_ONLY:
-        logger.warning("Running in FULL mode (with updater) — set COLLECTOR_ONLY=1 for production")
+    if RUN_UPDATER:
+        logger.info("Collector mode (updater running)")
         asyncio.create_task(updater_loop())
         asyncio.create_task(_mexc_intervals_refresher())
     else:
-        logger.warning("Running in COLLECTOR_ONLY mode — no updater tasks started (reads from Redis)")
-    if _app_pkg._REDIS is not None and COLLECTOR_ONLY:
+        logger.info("API mode (no updater)")
+    if _app_pkg._REDIS is not None and not RUN_UPDATER:
         asyncio.create_task(_redis_sse_subscriber())
     yield
     await _app_pkg._HTTP_SESSION.close()

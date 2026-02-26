@@ -42,8 +42,9 @@ from pathlib import Path
 # Make sure app.py module can be imported from the same directory
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Tell app.py's lifespan() NOT to start updater_loop (we start it here)
-os.environ["COLLECTOR_ONLY"] = "1"
+# Ensure the API lifespan does NOT start updater_loop (RUN_UPDATER defaults to 0)
+# The collector starts updater_loop itself below via _a.updater_loop().
+os.environ.setdefault("RUN_UPDATER", "0")
 
 logger = logging.getLogger("collector")
 
@@ -51,7 +52,7 @@ logger = logging.getLogger("collector")
 async def main() -> None:
     import aiohttp  # noqa: PLC0415
 
-    # Lazy import after setting COLLECTOR_ONLY so lifespan() is safe
+    # Lazy import after env var is set so lifespan() is safe
     import app as _a  # noqa: PLC0415
 
     # ── Thread pool ──────────────────────────────────────────────────────

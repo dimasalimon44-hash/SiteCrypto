@@ -18,6 +18,7 @@ from app.auth import (
 from app.config import (
     CFG,
     COLLECTOR_ONLY,
+    RUN_UPDATER,
     DEFAULT_EXCH_ENABLED,
     LOGOS_DIR,
     MAX_FREE_SPREAD,
@@ -201,8 +202,8 @@ async def api_pair(request: Request, pair_key: str):
 
 @router.post("/api/refresh")
 async def api_refresh():
-    if COLLECTOR_ONLY:
-        return JSONResponse({"ok": False, "error": "collector_only_mode",
+    if not RUN_UPDATER:
+        return JSONResponse({"ok": False, "error": "api_only_mode",
                              "detail": "Data is managed by the collector process. Use ws_collector.py."}, status_code=503)
     from app.main import compute_once
     data = await compute_once()

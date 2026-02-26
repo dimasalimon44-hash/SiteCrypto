@@ -1,6 +1,5 @@
 [Unit]
-Description=Arbitrage WebSocket Collector
-Documentation=https://github.com/dimasalimon44-hash/SiteCrypto
+Description=Arbitrage Insights API (HTTP server, no updater)
 After=network.target redis.service
 Wants=redis.service
 
@@ -8,14 +7,14 @@ Wants=redis.service
 Type=simple
 User=root
 WorkingDirectory=/root/SiteCrypto
-ExecStart=/root/SiteCrypto/.venv/bin/python ws_collector.py
+ExecStart=/root/SiteCrypto/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
 Restart=always
 RestartSec=5
-Environment=LOG_LEVEL=INFO
+Environment=ENV=production
 Environment=REDIS_URL=redis://localhost:6379/0
+Environment=LOG_LEVEL=INFO
 Environment=TELEGRAM_BOT_TOKEN=ЗАМЕНИТЕ_НА_ТОКЕН_БОТА
 Environment=TELEGRAM_BOT_USERNAME=arbitrageinsights_bot
-Environment=SNAPSHOT_THROTTLE_SEC=0.3
 
 [Install]
 WantedBy=multi-user.target

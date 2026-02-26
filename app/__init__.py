@@ -66,6 +66,7 @@ from app.config import (  # noqa: E402
     DEFAULT_MIN_SPREAD,
     REFRESH_SEC,
     COLLECTOR_ONLY,
+    RUN_UPDATER,
     MAX_FREE_SPREAD,
     BINGX_CONTRACTS,
     BINGX_FUNDING_RATE,

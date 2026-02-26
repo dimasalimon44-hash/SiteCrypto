@@ -6,8 +6,8 @@ Wants=redis.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/brain-acad-lab-2/arbitrage_dashboard
-ExecStart=/root/brain-acad-lab-2/arbitrage_dashboard/.venv/bin/python collector.py
+WorkingDirectory=/root/SiteCrypto
+ExecStart=/root/SiteCrypto/.venv/bin/python collector.py
 Restart=always
 RestartSec=5
 Environment=ENV=production
