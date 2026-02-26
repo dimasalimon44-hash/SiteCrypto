@@ -36,7 +36,7 @@ if errorlevel 1 (
 )
 
 echo [INFO] Starting dashboard: http://127.0.0.1:8000
-"%VENV_PY%" app.py
+"%VENV_PY%" run.py
 
 if errorlevel 1 (
   echo [ERROR] Dashboard exited with an error.
