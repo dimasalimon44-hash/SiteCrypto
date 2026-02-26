@@ -1,9 +1,8 @@
-"""API routes: /api/data, /api/config, /api/pair, /api/assets, /api/funding-next, /api/refresh, /events."""
+"""API routes: /api/data, /api/config, /api/pair, /api/assets, /api/refresh, /events."""
 import asyncio
 import json
 import logging
 import os
-import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Request
@@ -33,8 +32,6 @@ from app.store import (
     _rhist_get,
     CACHE,
     CACHE_LOCK,
-    FUNDING_STORE,
-    FUNDING_LOCK,
     PAIR_HISTORY_MAX,
     _rebuild_data_cache,
     _rcache_set,
@@ -67,34 +64,6 @@ def list_sounds() -> List[str]:
     return out
 
 
-@router.get("/api/funding-next")
-async def api_funding_next(exchange: str = "", symbol: str = ""):
-    """Return the nearest next-funding timestamp (ms UTC) for the given exchange.
-
-    Data is served entirely from precomputed in-memory stores updated by the
-    collector — no live exchange API calls are made in this handler.
-    """
-    ex = exchange.strip().lower()
-    now_ms = int(time.time() * 1000)
-    sym_upper = symbol.strip().upper()
-
-    # Per-symbol lookup: search the in-memory live rows (no I/O, no API call)
-    if ex and sym_upper:
-        live = await _rlive_all()
-        for row in live.values():
-            if str(row.get("buy_ex") or "").lower() == ex and str(row.get("symbol") or "").upper() == sym_upper:
-                ts = int(row.get("buy_next_ts_ms") or 0)
-                if ts > now_ms:
-                    return JSONResponse({"nextFundingTime": ts, "exchange": exchange, "symbol": symbol})
-            if str(row.get("sell_ex") or "").lower() == ex and str(row.get("symbol") or "").upper() == sym_upper:
-                ts = int(row.get("sell_next_ts_ms") or 0)
-                if ts > now_ms:
-                    return JSONResponse({"nextFundingTime": ts, "exchange": exchange, "symbol": symbol})
-
-    # Exchange-level: return precomputed nearest funding timestamp
-    with FUNDING_LOCK:
-        nearest_funding_ms = FUNDING_STORE.get(ex, 0)
-    return JSONResponse({"nextFundingTime": nearest_funding_ms, "exchange": exchange})
 
 
 # ---------------------------------------------------------------------------
