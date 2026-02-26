@@ -384,7 +384,7 @@ async def _aggregator_task() -> None:
 
 
 async def _next_funding_task() -> None:
-    """Refresh FUNDING_STORE from cached live rows every 15 minutes.
+    """Refresh FUNDING_STORE from cached live rows every 10 minutes.
 
     Next funding timestamps change at most once per funding interval (typically
     every 8 hours), so there is no need to recompute them on every aggregation
@@ -414,7 +414,7 @@ async def _next_funding_task() -> None:
             logger.info("[next-funding] store updated: %d exchanges", len(funding))
         except Exception:
             logger.exception("[next-funding] task error")
-        await asyncio.sleep(900)  # 15 minutes
+        await asyncio.sleep(600)  # 10 minutes
 
 
 async def updater_loop() -> None:
