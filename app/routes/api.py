@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Request
@@ -137,6 +138,23 @@ async def api_data(request: Request):
             return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
         return Response(content=cached, media_type="application/json",
                         headers={"ETag": etag, "Cache-Control": "no-cache"} if etag else {"Cache-Control": "no-cache"})
+
+    # Fallback: build cache directly from arb:live hash when no snapshot is available.
+    # The collector writes HSET arb:live but may not publish arb:snap:* snapshots yet
+    # (e.g. first startup, older collector version, or snapshot TTL expired).
+    try:
+        live = await _rlive_all()
+        if live:
+            _rebuild_data_cache(list(live.values()), {"updated_at": time.strftime("%H:%M:%S")})
+            cached = _DATA_CACHE.get(tier)
+            if cached:
+                etag = _DATA_ETAG.get(tier, "")
+                if etag and request.headers.get("If-None-Match") == etag:
+                    return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+                return Response(content=cached, media_type="application/json",
+                                headers={"ETag": etag, "Cache-Control": "no-cache"} if etag else {"Cache-Control": "no-cache"})
+    except Exception:
+        logger.debug("[api_data] arb:live fallback failed", exc_info=True)
 
     return JSONResponse(
         {
