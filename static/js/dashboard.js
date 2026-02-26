@@ -68,6 +68,12 @@ const TimerHub=(function(){
   return{subscribe,update,formatTime};
 })();
 
+// startFundingTimer — called ONCE per new row; delegates to TimerHub so the
+// single global tick drives all countdowns without per-element intervals.
+function startFundingTimer(elementId,endTimeMs,exchange,symbol,fundingInterval,fallbackEta){
+  TimerHub.subscribe(elementId,endTimeMs,exchange,symbol,fundingInterval,fallbackEta);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 let STATE={config:null,data:null,pinned:new Set(JSON.parse(localStorage.getItem('pinnedPairs')||'[]')),theme:localStorage.getItem('theme')||'theme-classic',sound:(localStorage.getItem('soundOn')||'0')==='1',lang:localStorage.getItem('lang')||'ru',soundFile:localStorage.getItem('soundFile')||'sms.wav',assets:{logos:{},sounds:[]},sortKey:'spread',sortDir:'desc',token:localStorage.getItem('authToken')||'',user:null,publicKey:'',authMode:'login'};
 const I18N={
@@ -304,11 +310,31 @@ if(alertKey!==LAST_ALERT){LAST_ALERT=alertKey; playAlert();}
 const split=(a,b,col='',lbl='')=>`<td class='split-cell mono' data-col='${col}' data-label='${lbl}'><div class='line'>${a}</div><div class='line'>${b}</div></td>`;
 const existingRows=new Map([...tb.querySelectorAll('tr[data-key]')].map(tr=>[tr.dataset.key,tr]));
 [...tb.querySelectorAll('tr:not([data-key])')].forEach(tr=>tr.remove());
+const toMexcSym=sym=>sym.replace(/USDT$/,'')+'_USDT';
 rows.forEach(r=>{
   const rKey=pairKey(r);
   const pin=isPinnedPair(r);
+  const bSym=r.buy_ex==='MEXC'?toMexcSym(r.symbol):'';
+  const sSym=r.sell_ex==='MEXC'?toMexcSym(r.symbol):'';
   let tr=existingRows.get(rKey);
-  if(!tr){tr=document.createElement('tr'); tr.dataset.key=rKey;}
+  if(tr){
+    // Existing row: update only dynamic cells; keep timer spans intact to avoid flicker
+    tr.className=pin?'pinned':'';
+    const fav=tr.querySelector('.fav'); if(fav){fav.textContent=pin?'★':'☆'; fav.onclick=()=>togglePinnedPair(r);}
+    const priceCell=tr.querySelector('[data-col="price"]'); if(priceCell){const ls=priceCell.querySelectorAll('.line'); if(ls[0])ls[0].textContent=fmtPrice(r.buy_ask); if(ls[1])ls[1].textContent=fmtPrice(r.sell_bid);}
+    const fundCell=tr.querySelector('[data-col="funding"]'); if(fundCell){const ls=fundCell.querySelectorAll('.line'); if(ls[0])ls[0].innerHTML=`${fmtPct(r.buy_funding,3)} / <span id="ivl-${rKey}-buy">${r.buy_funding_interval||'8h'}</span>`; if(ls[1])ls[1].innerHTML=`${fmtPct(r.sell_funding,3)} / <span id="ivl-${rKey}-sell">${r.sell_funding_interval||'8h'}</span>`;}
+    const fspreadCell=tr.querySelector('[data-col="fspread"]'); if(fspreadCell){fspreadCell.className=`mono ${fundingClass(r.funding_spread)}`; fspreadCell.textContent=fmtPct(r.funding_spread,3);}
+    const spreadCell=tr.querySelector('[data-col="spread"]'); if(spreadCell){const sp=spreadCell.querySelector('.spread-pill'); if(sp){sp.className=`spread-pill ${spreadClass(r.spread)}`; sp.textContent=fmtPct(r.spread,2);}}
+    const volCell=tr.querySelector('[data-col="vol"]'); if(volCell){const ls=volCell.querySelectorAll('.line'); if(ls[0])ls[0].textContent=fmtUsd(r.buy_vol); if(ls[1])ls[1].textContent=fmtUsd(r.sell_vol);}
+    // Resync timer timestamps without recreating the spans
+    TimerHub.update(r.buy_ex, r.buy_next_ts_ms||0, bSym);
+    TimerHub.update(r.sell_ex, r.sell_next_ts_ms||0, sSym);
+    tb.appendChild(tr);
+    existingRows.delete(rKey);
+    return;
+  }
+  // New row: build full DOM once, then start timers
+  tr=document.createElement('tr'); tr.dataset.key=rKey;
   tr.className=pin?'pinned':'';
   const lbuy=logoFor(r.buy_ex);
   const lsell=logoFor(r.sell_ex);
@@ -328,12 +354,9 @@ rows.forEach(r=>{
     <td data-col='graf' data-label=''><a class='btn' style='padding:4px 8px;font-size:12px' href='/graph?pair_key=${encodeURIComponent(pairKey(r))}' target='_blank' rel='noopener'>Grafic</a></td>
   `;
   tr.querySelector('.fav').onclick=()=>togglePinnedPair(r);
-  // Subscribe live countdowns AFTER innerHTML so spans exist in DOM
-  const toMexcSym=sym=>sym.replace(/USDT$/,'')+'_USDT';
-  const bSym=r.buy_ex==='MEXC'?toMexcSym(r.symbol):'';
-  const sSym=r.sell_ex==='MEXC'?toMexcSym(r.symbol):'';
-  TimerHub.subscribe(`timer-${rKey}-buy`, r.buy_next_ts_ms||0, r.buy_ex, bSym, r.buy_funding_interval||'', r.funding_eta_buy||'');
-  TimerHub.subscribe(`timer-${rKey}-sell`,r.sell_next_ts_ms||0, r.sell_ex, sSym, r.sell_funding_interval||'', r.funding_eta_sell||'');
+  // Start live countdowns AFTER innerHTML so spans exist in DOM
+  startFundingTimer(`timer-${rKey}-buy`, r.buy_next_ts_ms||0, r.buy_ex, bSym, r.buy_funding_interval||'', r.funding_eta_buy||'');
+  startFundingTimer(`timer-${rKey}-sell`,r.sell_next_ts_ms||0, r.sell_ex, sSym, r.sell_funding_interval||'', r.funding_eta_sell||'');
   tb.appendChild(tr);
   existingRows.delete(rKey);
 });
