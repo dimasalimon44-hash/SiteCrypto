@@ -8,7 +8,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 import uvicorn
@@ -59,6 +59,16 @@ from app.store import (
 )
 
 logger = logging.getLogger("arb_dashboard")
+
+# ---------------------------------------------------------------------------
+# Per-exchange data caches — updated by independent background tasks
+# ---------------------------------------------------------------------------
+
+_MEXC_DATA: Dict[str, Any] = {}
+_BYBIT_DATA: Dict[str, Any] = {}
+_BINGX_DATA: Dict[str, Any] = {}
+# Timestamp of most recent exchange cache update; watched by _aggregator_task
+_LAST_EXCHANGE_UPDATE_TS: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Middleware
@@ -113,74 +123,32 @@ class SecurityHeadersMiddleware:
 # Compute engine
 # ---------------------------------------------------------------------------
 
-async def _push_pairs_to_live_rows(
-    mexc: Dict[str, Any],
-    bybit: Dict[str, Any],
-    bingx: Dict[str, Any],
-    min_vol: float,
-    min_spread: float,
-    symbols: Optional[set] = None,
-) -> None:
-    if symbols is None:
-        symbols = set(mexc.keys()) | set(bybit.keys()) | set(bingx.keys())
-    for i, symbol in enumerate(symbols):
-        if i % 20 == 0:
-            await asyncio.sleep(0)
-        market_rows = [r for r in (mexc.get(symbol), bybit.get(symbol), bingx.get(symbol)) if r is not None]
-        if len(market_rows) < 2:
-            continue
-        pairs = best_pairs(market_rows, min_vol=min_vol)
-        for pair in pairs:
-            if min_spread > 0 and pair["spread"] < min_spread:
-                continue
-            pair["symbol"] = symbol
-            key = f"{symbol}|{pair['buy_ex']}|{pair['sell_ex']}"
-            pair["pair_key"] = key
-            LIVE_ROWS[key] = pair
+def _build_bingx_candidates(mexc: Dict, bybit: Dict) -> List[str]:
+    """Build BingX candidate list sorted by 24h volume from MEXC+Bybit caches."""
+    candidates: Dict[str, float] = {}
+    for source in (mexc, bybit):
+        for symbol, row in source.items():
+            vol = row.vol24_usd if math.isfinite(row.vol24_usd) else 0.0
+            candidates[symbol] = max(candidates.get(symbol, 0.0), vol)
+    return [x[0] for x in sorted(candidates.items(), key=lambda item: item[1], reverse=True)]
 
 
-async def compute_once() -> Dict[str, Any]:
-    import app as _app_pkg
-    started = time.time()
-    session = _app_pkg._HTTP_SESSION
-    _owned = False
-    if session is None or session.closed:
-        session = aiohttp.ClientSession()
-        _owned = True
-    try:
-        enabled = CFG.get("enabled", DEFAULT_EXCH_ENABLED)
-        mexc_task = asyncio.create_task(load_mexc(session)) if enabled.get("MEXC", True) else None
-        bybit_task = asyncio.create_task(load_bybit(session)) if enabled.get("Bybit", True) else None
-        mexc = await mexc_task if mexc_task else {}
-        bybit = await bybit_task if bybit_task else {}
+async def _run_aggregation(
+    mexc: Dict, bybit: Dict, bingx: Dict,
+    started: Optional[float] = None,
+) -> Tuple[List[dict], Dict]:
+    """Compute spread pairs from exchange data snapshots and publish results.
 
-        min_vol = float(CFG.get("min_vol", DEFAULT_MIN_VOL_USD))
-        min_spread = float(CFG.get("min_spread", DEFAULT_MIN_SPREAD))
-
-        await _push_pairs_to_live_rows(mexc, bybit, {}, min_vol, min_spread)
-        _phase1_at = time.strftime("%H:%M:%S")
-        _rebuild_data_cache(list(LIVE_ROWS.values()), {
-            "updated_at": _phase1_at,
-            "dbg": {"mexc": len(mexc), "bybit": len(bybit), "bingx": 0, "kept": len(LIVE_ROWS), "took_ms": 0},
-        })
-        _broadcast_sse(json.dumps({"t": "upd", "at": _phase1_at}))
-
-        candidates: Dict[str, float] = {}
-        for source in (mexc, bybit):
-            for symbol, row in source.items():
-                vol = row.vol24_usd if math.isfinite(row.vol24_usd) else 0.0
-                candidates[symbol] = max(candidates.get(symbol, 0.0), vol)
-
-        sorted_candidates = [x[0] for x in sorted(candidates.items(), key=lambda item: item[1], reverse=True)]
-
-        bingx = await load_bingx(session, sorted_candidates) if enabled.get("BingX", True) else {}
-    finally:
-        if _owned:
-            await session.close()
+    Returns (rows_out, cache_meta).  Callers receive timing data and can log
+    exchange-specific metrics.  Broadcasts an SSE update event on completion.
+    """
+    if started is None:
+        started = time.time()
+    min_vol = float(CFG.get("min_vol", DEFAULT_MIN_VOL_USD))
+    min_spread = float(CFG.get("min_spread", DEFAULT_MIN_SPREAD))
 
     rows_out: List[dict] = []
     all_symbols = set(mexc.keys()) | set(bybit.keys()) | set(bingx.keys())
-
     for i, symbol in enumerate(all_symbols):
         if i % 20 == 0:
             await asyncio.sleep(0)
@@ -220,19 +188,71 @@ async def compute_once() -> Dict[str, Any]:
         await _rlive_del(k)
     await _rlive_set_batch({r["pair_key"]: r for r in rows_out})
 
-    cache_meta = {
+    took_ms = int((time.time() - started) * 1000)
+    cache_meta: Dict[str, Any] = {
         "updated_at": time.strftime("%H:%M:%S"),
         "dbg": {
             "mexc": len(mexc),
             "bybit": len(bybit),
             "bingx": len(bingx),
             "kept": len(rows_out),
-            "took_ms": int((time.time() - started) * 1000),
+            "took_ms": took_ms,
         },
     }
     await _rcache_set(cache_meta)
     _rebuild_data_cache(rows_out, cache_meta)
     asyncio.create_task(_rsnapshot_write())
+    _broadcast_sse(json.dumps({"t": "upd", "at": cache_meta["updated_at"]}))
+    return rows_out, cache_meta
+
+
+async def compute_once() -> Dict[str, Any]:
+    """Fetch all exchanges concurrently and compute spread pairs.
+
+    Used by /api/refresh for an on-demand forced refresh.  Also updates the
+    per-exchange in-memory caches so background tasks stay in sync.
+    """
+    import app as _app_pkg
+    global _MEXC_DATA, _BYBIT_DATA, _BINGX_DATA
+    started = time.time()
+    session = _app_pkg._HTTP_SESSION
+    _owned = False
+    if session is None or session.closed:
+        session = aiohttp.ClientSession()
+        _owned = True
+    try:
+        enabled = CFG.get("enabled", DEFAULT_EXCH_ENABLED)
+        mexc_t = asyncio.create_task(load_mexc(session)) if enabled.get("MEXC", True) else None
+        bybit_t = asyncio.create_task(load_bybit(session)) if enabled.get("Bybit", True) else None
+
+        _t0 = time.perf_counter()
+        mexc = await mexc_t if mexc_t else {}
+        bybit = await bybit_t if bybit_t else {}
+        logger.info(
+            "[MEXC+Bybit] loaded in %d ms | MEXC: %d | Bybit: %d",
+            int((time.perf_counter() - _t0) * 1000), len(mexc), len(bybit),
+        )
+        if mexc:
+            _MEXC_DATA = mexc
+        if bybit:
+            _BYBIT_DATA = bybit
+
+        _t_bingx = time.perf_counter()
+        bingx = (
+            await load_bingx(session, _build_bingx_candidates(mexc, bybit))
+            if enabled.get("BingX", True) else {}
+        )
+        logger.info(
+            "[BingX] loaded %d symbols in %d ms",
+            len(bingx), int((time.perf_counter() - _t_bingx) * 1000),
+        )
+        if bingx:
+            _BINGX_DATA = bingx
+    finally:
+        if _owned:
+            await session.close()
+
+    rows_out, cache_meta = await _run_aggregation(mexc, bybit, bingx, started)
 
     took_ms = int((time.time() - started) * 1000)
     logger.info(
@@ -250,20 +270,131 @@ async def compute_once() -> Dict[str, Any]:
     }
 
 
-async def updater_loop() -> None:
+# ---------------------------------------------------------------------------
+# Per-exchange independent background tasks
+# ---------------------------------------------------------------------------
+
+async def _mexc_task() -> None:
+    """Independent MEXC data fetcher — runs as a separate background asyncio task."""
+    import app as _app_pkg
+    global _MEXC_DATA, _LAST_EXCHANGE_UPDATE_TS
     while True:
-        cycle_started = time.time()
-        try:
-            data = await compute_once()
-            async with CACHE_LOCK:
-                CACHE.update(data)
-            cycle_started = float(data.get("started_ts", cycle_started)) if isinstance(data, dict) else cycle_started
-            _broadcast_sse(json.dumps({"t": "upd", "at": data.get("updated_at", "")}))
-        except Exception:
-            logger.exception("updater_loop: compute_once raised an error")
-        elapsed = max(0.0, time.time() - cycle_started)
-        wait_for = max(0.05, float(CFG.get("refresh_sec", REFRESH_SEC)) - elapsed)
-        await asyncio.sleep(wait_for)
+        enabled = CFG.get("enabled", DEFAULT_EXCH_ENABLED)
+        if enabled.get("MEXC", True):
+            start = time.perf_counter()
+            try:
+                session = _app_pkg._HTTP_SESSION
+                if session is not None and not session.closed:
+                    data = await asyncio.wait_for(load_mexc(session), timeout=20.0)
+                    if data:
+                        _MEXC_DATA = data
+                        _LAST_EXCHANGE_UPDATE_TS = time.time()
+                    logger.info("[MEXC] update took %d ms, %d symbols",
+                                int((time.perf_counter() - start) * 1000), len(_MEXC_DATA))
+            except asyncio.TimeoutError:
+                logger.warning("[MEXC] fetch timed out after 20 s")
+            except Exception:
+                logger.exception("[MEXC] task error")
+        await asyncio.sleep(float(CFG.get("refresh_sec", REFRESH_SEC)))
+
+
+async def _bybit_task() -> None:
+    """Independent Bybit data fetcher — runs as a separate background asyncio task."""
+    import app as _app_pkg
+    global _BYBIT_DATA, _LAST_EXCHANGE_UPDATE_TS
+    while True:
+        enabled = CFG.get("enabled", DEFAULT_EXCH_ENABLED)
+        if enabled.get("Bybit", True):
+            start = time.perf_counter()
+            try:
+                session = _app_pkg._HTTP_SESSION
+                if session is not None and not session.closed:
+                    data = await asyncio.wait_for(load_bybit(session), timeout=20.0)
+                    if data:
+                        _BYBIT_DATA = data
+                        _LAST_EXCHANGE_UPDATE_TS = time.time()
+                    logger.info("[Bybit] update took %d ms, %d symbols",
+                                int((time.perf_counter() - start) * 1000), len(_BYBIT_DATA))
+            except asyncio.TimeoutError:
+                logger.warning("[Bybit] fetch timed out after 20 s")
+            except Exception:
+                logger.exception("[Bybit] task error")
+        await asyncio.sleep(float(CFG.get("refresh_sec", REFRESH_SEC)))
+
+
+async def _bingx_task() -> None:
+    """Independent BingX data fetcher — runs as a separate background asyncio task.
+
+    Starts after one REFRESH_SEC delay so MEXC and Bybit have data to build
+    the candidate symbol list before the first BingX fetch.
+    """
+    import app as _app_pkg
+    global _BINGX_DATA, _LAST_EXCHANGE_UPDATE_TS
+    await asyncio.sleep(float(CFG.get("refresh_sec", REFRESH_SEC)))
+    while True:
+        enabled = CFG.get("enabled", DEFAULT_EXCH_ENABLED)
+        if enabled.get("BingX", True):
+            start = time.perf_counter()
+            try:
+                session = _app_pkg._HTTP_SESSION
+                if session is not None and not session.closed:
+                    candidates = _build_bingx_candidates(_MEXC_DATA, _BYBIT_DATA)
+                    data = await asyncio.wait_for(
+                        load_bingx(session, candidates), timeout=30.0
+                    )
+                    if data:
+                        _BINGX_DATA = data
+                        _LAST_EXCHANGE_UPDATE_TS = time.time()
+                    logger.info("[BingX] update took %d ms, %d symbols",
+                                int((time.perf_counter() - start) * 1000), len(_BINGX_DATA))
+            except asyncio.TimeoutError:
+                logger.warning("[BingX] fetch timed out after 30 s")
+            except Exception:
+                logger.exception("[BingX] task error")
+        await asyncio.sleep(float(CFG.get("refresh_sec", REFRESH_SEC)))
+
+
+async def _aggregator_task() -> None:
+    """Reads per-exchange caches whenever any exchange data is refreshed,
+    computes spread pairs, and publishes results to Redis/SSE.
+
+    Checks every second but only recomputes when exchange data has changed
+    since the last aggregation run.
+
+    asyncio is single-threaded (cooperative), so all three cache reads below
+    happen without any await point in between — the exchange tasks cannot
+    interleave here.  Each cache variable is replaced atomically (whole-dict
+    assignment), so _run_aggregation receives consistent snapshots via its
+    parameter bindings even across the internal await asyncio.sleep(0) yields.
+    """
+    last_agg_ts: float = 0.0
+    while True:
+        current_update = _LAST_EXCHANGE_UPDATE_TS
+        if current_update > last_agg_ts and (_MEXC_DATA or _BYBIT_DATA or _BINGX_DATA):
+            last_agg_ts = time.time()
+            start = time.perf_counter()
+            # Capture snapshots before the first await; parameter binding in
+            # _run_aggregation protects against subsequent dict replacement.
+            try:
+                await _run_aggregation(_MEXC_DATA, _BYBIT_DATA, _BINGX_DATA)
+                took = int((time.perf_counter() - start) * 1000)
+                logger.info("[aggregator] spreads computed in %d ms", took)
+                if took > CYCLE_WARN_MS:
+                    logger.warning("[aggregator] spread computation > %d ms: %d ms",
+                                   CYCLE_WARN_MS, took)
+            except Exception:
+                logger.exception("[aggregator] task error")
+        await asyncio.sleep(1.0)
+
+
+async def updater_loop() -> None:
+    """Start per-exchange fetchers and the aggregator as concurrent independent tasks."""
+    await asyncio.gather(
+        _mexc_task(),
+        _bybit_task(),
+        _bingx_task(),
+        _aggregator_task(),
+    )
 
 
 # ---------------------------------------------------------------------------
