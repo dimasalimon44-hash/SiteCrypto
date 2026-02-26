@@ -261,8 +261,8 @@ rows.forEach(r=>{
   if(tr){
     // Existing row: update only dynamic cells; keep timer spans intact to avoid flicker
     tr.className=pin?'pinned':'';
-    tr.dataset.nextFundingBuy=r.buy_next_ts_ms||0;
-    tr.dataset.nextFundingSell=r.sell_next_ts_ms||0;
+    if(!Number(tr.dataset.nextFundingBuy)||Number(tr.dataset.nextFundingBuy)<Date.now())tr.dataset.nextFundingBuy=r.buy_next_ts_ms||0;
+    if(!Number(tr.dataset.nextFundingSell)||Number(tr.dataset.nextFundingSell)<Date.now())tr.dataset.nextFundingSell=r.sell_next_ts_ms||0;
     const fav=tr.querySelector('.fav'); if(fav){fav.textContent=pin?'★':'☆'; fav.onclick=()=>togglePinnedPair(r);}
     const priceCell=tr.querySelector('[data-col="price"]'); if(priceCell){const ls=priceCell.querySelectorAll('.line'); if(ls[0])ls[0].textContent=fmtPrice(r.buy_ask); if(ls[1])ls[1].textContent=fmtPrice(r.sell_bid);}
     const fundCell=tr.querySelector('[data-col="funding"]'); if(fundCell){const ls=fundCell.querySelectorAll('.line'); if(ls[0])ls[0].innerHTML=`${fmtPct(r.buy_funding,3)} / <span id="ivl-${rKey}-buy">${r.buy_funding_interval||'8h'}</span>`; if(ls[1])ls[1].innerHTML=`${fmtPct(r.sell_funding,3)} / <span id="ivl-${rKey}-sell">${r.sell_funding_interval||'8h'}</span>`;}
