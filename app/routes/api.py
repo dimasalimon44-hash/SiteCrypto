@@ -2,13 +2,10 @@
 import asyncio
 import json
 import logging
-import math
 import os
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import aiohttp
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -19,18 +16,13 @@ from app.auth import (
     _session_user_async,
 )
 from app.config import (
-    BINGX_FUNDING_RATE,
     CFG,
     COLLECTOR_ONLY,
     DEFAULT_EXCH_ENABLED,
     LOGOS_DIR,
     MAX_FREE_SPREAD,
-    MEXC_FUNDING_CACHE_TTL_SEC,
-    MEXC_FUNDING_RATE_BTC,
     SOUNDS_DIR,
 )
-from app.exchanges import fetch_json, to_float, _pick_ts
-from app.exchanges.mexc import _MEXC_FUND_CACHE, _MEXC_SYM_FUND_CACHE
 from app.sse import _SSE_QUEUES, _broadcast_sse
 from app.store import (
     _DATA_CACHE,
@@ -40,6 +32,8 @@ from app.store import (
     _rhist_get,
     CACHE,
     CACHE_LOCK,
+    FUNDING_STORE,
+    FUNDING_LOCK,
     PAIR_HISTORY_MAX,
     _rebuild_data_cache,
     _rcache_set,
@@ -72,23 +66,34 @@ def list_sounds() -> List[str]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# MEXC timestamp helper
-# ---------------------------------------------------------------------------
+@router.get("/api/funding-next")
+async def api_funding_next(exchange: str = "", symbol: str = ""):
+    """Return the nearest next-funding timestamp (ms UTC) for the given exchange.
 
-def _mexc_ts_raw_to_ms(ts_raw: Any, now_ms: int) -> int:
-    """Convert MEXC nextSettleTime/nextFundingTime to an absolute UTC millisecond timestamp."""
-    from app.config import TIMESTAMP_MS_THRESHOLD
-    ts_val = to_float(ts_raw)
-    if not math.isfinite(ts_val) or ts_val <= 0:
-        return 0
-    if ts_val > TIMESTAMP_MS_THRESHOLD:
-        ts_ms = int(ts_val)
-    elif ts_val > 1e9:
-        ts_ms = int(ts_val * 1000)
-    else:
-        ts_ms = now_ms + int(ts_val)
-    return ts_ms if ts_ms > now_ms else 0
+    Data is served entirely from precomputed in-memory stores updated by the
+    collector — no live exchange API calls are made in this handler.
+    """
+    ex = exchange.strip().lower()
+    now_ms = int(time.time() * 1000)
+    sym_upper = symbol.strip().upper()
+
+    # Per-symbol lookup: search the in-memory live rows (no I/O, no API call)
+    if ex and sym_upper:
+        live = await _rlive_all()
+        for row in live.values():
+            if str(row.get("buy_ex") or "").lower() == ex and str(row.get("symbol") or "").upper() == sym_upper:
+                ts = int(row.get("buy_next_ts_ms") or 0)
+                if ts > now_ms:
+                    return JSONResponse({"nextFundingTime": ts, "exchange": exchange, "symbol": symbol})
+            if str(row.get("sell_ex") or "").lower() == ex and str(row.get("symbol") or "").upper() == sym_upper:
+                ts = int(row.get("sell_next_ts_ms") or 0)
+                if ts > now_ms:
+                    return JSONResponse({"nextFundingTime": ts, "exchange": exchange, "symbol": symbol})
+
+    # Exchange-level: return precomputed nearest funding timestamp
+    with FUNDING_LOCK:
+        nearest_funding_ms = FUNDING_STORE.get(ex, 0)
+    return JSONResponse({"nextFundingTime": nearest_funding_ms, "exchange": exchange})
 
 
 # ---------------------------------------------------------------------------
@@ -132,67 +137,6 @@ async def api_config_set(payload: Dict[str, Any]):
 async def api_assets():
     logos = {ex: find_logo(ex) for ex in ("MEXC", "Bybit", "BingX")}
     return JSONResponse({"logos": logos, "sounds": list_sounds()})
-
-
-@router.get("/api/funding-next")
-async def api_funding_next(exchange: str = "", symbol: str = ""):
-    """Return the nearest next-funding timestamp (ms UTC) for the given exchange."""
-    live = await _rlive_all()
-    ex = exchange.strip().lower()
-    nearest_funding_ms: int = 0
-    now_ms = int(time.time() * 1000)
-
-    sym_upper = symbol.strip().upper()
-    if ex == "mexc" and sym_upper:
-        cached = _MEXC_SYM_FUND_CACHE.get(sym_upper, {})
-        if (time.time() - cached.get("at", 0.0)) < MEXC_FUNDING_CACHE_TTL_SEC and cached.get("ts_ms", 0) > now_ms:
-            return JSONResponse({"nextFundingTime": cached["ts_ms"], "exchange": exchange, "symbol": symbol})
-        try:
-            async with aiohttp.ClientSession() as _s:
-                raw = await fetch_json(_s, f"https://contract.mexc.com/api/v1/contract/funding_rate/{sym_upper}")
-            d = raw.get("data") if isinstance(raw, dict) else None
-            if isinstance(d, dict):
-                ts_raw = d.get("nextSettleTime") or d.get("nextFundingTime")
-                ts_ms = _mexc_ts_raw_to_ms(ts_raw, now_ms)
-                if ts_ms > now_ms:
-                    _MEXC_SYM_FUND_CACHE[sym_upper] = {"ts_ms": ts_ms, "at": time.time()}
-                    logger.info("[MEXC] %s: next %s", sym_upper, datetime.fromtimestamp(ts_ms/1000, tz=timezone.utc).isoformat())
-                    return JSONResponse({"nextFundingTime": ts_ms, "exchange": exchange, "symbol": symbol})
-        except Exception as _e:
-            logger.warning("[MEXC] per-symbol funding-next error for %s: %s", sym_upper, _e)
-
-    for row in live.values():
-        if row.get("buy_ex", "").lower() == ex:
-            ts = int(row.get("buy_next_ts_ms") or 0)
-            if ts > now_ms and (nearest_funding_ms == 0 or ts < nearest_funding_ms):
-                nearest_funding_ms = ts
-        if row.get("sell_ex", "").lower() == ex:
-            ts = int(row.get("sell_next_ts_ms") or 0)
-            if ts > now_ms and (nearest_funding_ms == 0 or ts < nearest_funding_ms):
-                nearest_funding_ms = ts
-
-    if ex == "mexc" and nearest_funding_ms == 0:
-        cached_ts = _MEXC_FUND_CACHE["ts_ms"]
-        cached_at = _MEXC_FUND_CACHE["at"]
-        if cached_ts > now_ms and (time.time() - cached_at) < MEXC_FUNDING_CACHE_TTL_SEC:
-            nearest_funding_ms = cached_ts
-        else:
-            try:
-                async with aiohttp.ClientSession() as _s:
-                    raw = await fetch_json(_s, MEXC_FUNDING_RATE_BTC)
-                d = raw.get("data") if isinstance(raw, dict) else None
-                if isinstance(d, dict):
-                    ts_raw = d.get("nextSettleTime") or d.get("nextFundingTime")
-                    ts_ms = _mexc_ts_raw_to_ms(ts_raw, now_ms)
-                    if ts_ms > now_ms:
-                        _MEXC_FUND_CACHE["ts_ms"] = ts_ms
-                        _MEXC_FUND_CACHE["at"] = time.time()
-                        nearest_funding_ms = ts_ms
-                        logger.info("[MEXC] next funding: %s", datetime.fromtimestamp(ts_ms/1000, tz=timezone.utc).isoformat())
-            except Exception as _e:
-                logger.warning("[MEXC] funding-next fallback error: %s", _e)
-
-    return JSONResponse({"nextFundingTime": nearest_funding_ms, "exchange": exchange})
 
 
 @router.get("/api/data")

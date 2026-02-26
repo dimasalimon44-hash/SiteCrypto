@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import time
+from threading import Lock as _ThreadLock
 from typing import Any, Dict, List, Optional
 
 from app.config import MAX_FREE_SPREAD
@@ -33,6 +34,16 @@ CACHE_LOCK = asyncio.Lock()
 # Pre-built /api/data response bodies per access tier
 _DATA_CACHE: Dict[str, bytes] = {}
 _DATA_ETAG: Dict[str, str] = {}
+
+# Central pre-computed data store (populated by collectors / compute_once)
+DATA_STORE: List[Dict] = []
+DATA_LOCK = _ThreadLock()
+LAST_UPDATE_TS: float = 0.0
+
+# Per-exchange nearest next-funding timestamps (ms UTC), keyed by exchange name
+# lower-cased (e.g. "mexc", "bybit", "bingx").  Updated by _rebuild_data_cache().
+FUNDING_STORE: Dict[str, int] = {}
+FUNDING_LOCK = _ThreadLock()
 
 
 def _get_redis() -> Optional[Any]:
@@ -204,9 +215,30 @@ def _rebuild_data_cache(rows_out: List[dict], cache_meta: dict) -> None:
     returns the appropriate pre-built bytes directly — zero Redis I/O, zero
     JSON parsing, zero sorting, zero serialisation per user request.
     """
+    global LAST_UPDATE_TS
     sorted_rows = sorted(rows_out, key=_spread_sort_key, reverse=True)
     updated_at = cache_meta.get("updated_at", time.strftime("%H:%M:%S"))
     dbg_base = dict(cache_meta.get("dbg", {}))
+
+    # Update central data store (used by API as precomputed read-only source)
+    with DATA_LOCK:
+        DATA_STORE.clear()
+        DATA_STORE.extend(sorted_rows)
+        LAST_UPDATE_TS = time.time()
+
+    # Update per-exchange nearest next-funding timestamps
+    now_ms = int(time.time() * 1000)
+    funding: Dict[str, int] = {}
+    for r in sorted_rows:
+        for ex_key, ts_key in (("buy_ex", "buy_next_ts_ms"), ("sell_ex", "sell_next_ts_ms")):
+            ex = str(r.get(ex_key) or "").lower()
+            ts = int(r.get(ts_key) or 0)
+            if ex and ts > now_ms:
+                if ex not in funding or ts < funding[ex]:
+                    funding[ex] = ts
+    with FUNDING_LOCK:
+        FUNDING_STORE.clear()
+        FUNDING_STORE.update(funding)
 
     for tier in ("guest", "paid", "admin"):
         if tier == "guest":
