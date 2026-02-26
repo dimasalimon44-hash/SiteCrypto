@@ -140,25 +140,9 @@ def _decrypt_client_field(value: str) -> str:
 
 
 def _extract_auth_credentials(payload: Dict[str, Any]) -> Tuple[str, str, str]:
-    plain_username = _normalize_username(str(payload.get("username") or ""))
-    plain_password = str(payload.get("password") or "")
+    username = _normalize_username(str(payload.get("username") or ""))
+    password = str(payload.get("password") or "")
     tg_username = _normalize_tg_username(str(payload.get("tg_username") or ""))
-
-    dec_username = ""
-    dec_password = ""
-
-    enc_u = str(payload.get("username_enc") or "")
-    enc_p = str(payload.get("password_enc") or "")
-    if enc_u and enc_p:
-        try:
-            dec_username = _normalize_username(_decrypt_client_field(enc_u))
-            dec_password = _decrypt_client_field(enc_p)
-        except Exception:
-            dec_username = ""
-            dec_password = ""
-
-    username = dec_username or plain_username
-    password = dec_password or plain_password
     return username, password, tg_username
 
 
@@ -194,6 +178,7 @@ def _seed_admin(users: Dict[str, Any]) -> None:
             "username": "admin",
             "salt": salt,
             "password_hash": pwh,
+            "pbkdf2_iters": PBKDF2_ITERS,
             "is_admin": True,
             "subscription_approved": True,
             "created_at": int(time.time()),
@@ -204,6 +189,7 @@ def _seed_admin(users: Dict[str, Any]) -> None:
             "username": "adminegor",
             "salt": salt2,
             "password_hash": pwh2,
+            "pbkdf2_iters": PBKDF2_ITERS,
             "is_admin": True,
             "subscription_approved": True,
             "created_at": int(time.time()),
