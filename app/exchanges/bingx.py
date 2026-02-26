@@ -214,7 +214,7 @@ async def load_bingx(
                     fund = _pick_float(prem, ["fundingRate", "lastFundingRate", "funding"])
                 if not math.isfinite(fund):
                     fund = _pick_float(tick, ["fundingRate", "lastFundingRate", "funding"])
-                next_ts = _pick_ts(fnd, ["nextFundingTime", "nextFundingTimestamp", "fundingTime"])
+                next_ts = _pick_ts(fnd, ["nextFundingTime", "nextFundingTimestamp"])
                 if not math.isfinite(next_ts):
                     next_ts = _pick_ts(prem, ["nextFundingTime", "nextFundingTimestamp", "nextSettleTime"])
                 if not math.isfinite(next_ts):
@@ -245,6 +245,13 @@ async def load_bingx(
                     bingx_interval_h = _infer_bingx_interval_h(next_ts)
                 if bingx_interval_h and norm_sym not in _BINGX_INTERVALS:
                     _BINGX_INTERVALS[norm_sym] = bingx_interval_h
+
+                # If nextFundingTime was absent, advance the last fundingTime by
+                # one interval so we store the *next* event, not the previous one.
+                if not math.isfinite(next_ts) and bingx_interval_h:
+                    last_ts = _pick_ts(fnd, ["fundingTime"])
+                    if math.isfinite(last_ts):
+                        next_ts = last_ts + bingx_interval_h * 3600.0
 
                 market_row = MarketRow(
                     exchange="BingX",

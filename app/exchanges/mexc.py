@@ -18,6 +18,7 @@ from app.exchanges import (
     mexc_trade_url,
     normalize_usdt,
     to_float,
+    _pick_ts,
     _pick_ts_or_delta,
 )
 from app.funding import (
@@ -204,7 +205,6 @@ async def load_mexc(session: aiohttp.ClientSession) -> Dict[str, MarketRow]:
             if quote.upper() != "USDT":
                 continue
             fund = to_float(it.get("fundingRate"))
-            next_ts = _pick_ts_or_delta(it, ["nextFundingTime", "nextSettleTime", "fundingTime"])
             interval_h = (
                 _MEXC_INTERVALS.get(symbol)
                 or _pick_int(
@@ -215,6 +215,13 @@ async def load_mexc(session: aiohttp.ClientSession) -> Dict[str, MarketRow]:
                 )
                 or 8
             )
+            next_ts = _pick_ts_or_delta(it, ["nextFundingTime", "nextSettleTime"])
+            # If nextFundingTime was absent, advance the last fundingTime by one
+            # interval so we store the *next* event, not the previous one.
+            if not math.isfinite(next_ts):
+                last_ts = _pick_ts(it, ["fundingTime"])
+                if math.isfinite(last_ts):
+                    next_ts = last_ts + interval_h * 3600.0
             out[normalize_usdt(base)] = MarketRow(
                 exchange="MEXC",
                 bid=to_float(it.get("bid1")),
