@@ -178,13 +178,14 @@ from app.auth import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def __getattr__(name: str) -> Any:
-    """Lazily proxy compute_once and updater_loop from app.main.
+    """Lazily proxy task functions and compute_once/updater_loop from app.main.
 
     These are defined in app.main which imports from routes which import from
     auth/store — all of which are already loaded by the time this function is
     called (only at runtime, never at module load time).
     """
-    if name in ("updater_loop", "compute_once"):
+    if name in ("updater_loop", "compute_once",
+                "_mexc_task", "_bybit_task", "_bingx_task", "_aggregator_task"):
         from app import main as _main
         return getattr(_main, name)
     raise AttributeError(f"module 'app' has no attribute {name!r}")

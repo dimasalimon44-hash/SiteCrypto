@@ -25,7 +25,6 @@ from app.config import (
     CFG,
     COLLECTOR_ONLY,
     RUN_UPDATER,
-    CYCLE_WARN_MS,
     DEFAULT_EXCH_ENABLED,
     DEFAULT_MIN_SPREAD,
     DEFAULT_MIN_VOL_USD,
@@ -259,8 +258,6 @@ async def compute_once() -> Dict[str, Any]:
         "Cycle: %d ms | MEXC: %d | Bybit: %d | BingX: %d | pairs: %d",
         took_ms, len(mexc), len(bybit), len(bingx), len(rows_out),
     )
-    if took_ms > CYCLE_WARN_MS:
-        logger.warning("Cycle > %d ms: %d ms — consider increasing REFRESH_SEC", CYCLE_WARN_MS, took_ms)
 
     return {
         "started_ts": started,
@@ -379,9 +376,6 @@ async def _aggregator_task() -> None:
                 await _run_aggregation(_MEXC_DATA, _BYBIT_DATA, _BINGX_DATA)
                 took = int((time.perf_counter() - start) * 1000)
                 logger.info("[aggregator] spreads computed in %d ms", took)
-                if took > CYCLE_WARN_MS:
-                    logger.warning("[aggregator] spread computation > %d ms: %d ms",
-                                   CYCLE_WARN_MS, took)
             except Exception:
                 logger.exception("[aggregator] task error")
         await asyncio.sleep(1.0)
