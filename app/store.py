@@ -41,7 +41,8 @@ DATA_LOCK = _ThreadLock()
 LAST_UPDATE_TS: float = 0.0
 
 # Per-exchange nearest next-funding timestamps (ms UTC), keyed by exchange name
-# lower-cased (e.g. "mexc", "bybit", "bingx").  Updated by _rebuild_data_cache().
+# lower-cased (e.g. "mexc", "bybit", "bingx").  Updated by _next_funding_task()
+# every 15 minutes — not on every aggregation cycle.
 FUNDING_STORE: Dict[str, int] = {}
 FUNDING_LOCK = _ThreadLock()
 
@@ -225,20 +226,6 @@ def _rebuild_data_cache(rows_out: List[dict], cache_meta: dict) -> None:
         DATA_STORE.clear()
         DATA_STORE.extend(sorted_rows)
         LAST_UPDATE_TS = time.time()
-
-    # Update per-exchange nearest next-funding timestamps
-    now_ms = int(time.time() * 1000)
-    funding: Dict[str, int] = {}
-    for r in sorted_rows:
-        for ex_key, ts_key in (("buy_ex", "buy_next_ts_ms"), ("sell_ex", "sell_next_ts_ms")):
-            ex = str(r.get(ex_key) or "").lower()
-            ts = int(r.get(ts_key) or 0)
-            if ex and ts > now_ms:
-                if ex not in funding or ts < funding[ex]:
-                    funding[ex] = ts
-    with FUNDING_LOCK:
-        FUNDING_STORE.clear()
-        FUNDING_STORE.update(funding)
 
     for tier in ("guest", "paid", "admin"):
         if tier == "guest":
