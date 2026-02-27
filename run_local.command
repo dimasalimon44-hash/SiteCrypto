@@ -33,4 +33,4 @@ echo "[6/6] Starting FastAPI (reload mode)..."
 echo "Open in browser: http://127.0.0.1:8000"
 echo "Stop server: Ctrl+C"
 
-exec uvicorn app:app --reload --host 127.0.0.1 --port 8000
+exec uvicorn app.main:app --reload --host 127.0.0.1 --port 8000

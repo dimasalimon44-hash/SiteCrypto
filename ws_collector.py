@@ -51,7 +51,7 @@ from typing import Dict, List, Optional
 
 # ─── Bootstrap: must happen before importing app.py ──────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
-os.environ["COLLECTOR_ONLY"] = "1"   # prevent app.py lifespan from starting updater_loop
+os.environ.setdefault("RUN_UPDATER", "0")   # prevent app.py lifespan from starting updater_loop
 
 import aiohttp  # noqa: E402  (after sys.path insert)
 

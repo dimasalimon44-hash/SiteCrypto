@@ -1,0 +1,434 @@
+================================================================================
+ИНСТРУКЦИЯ ПО ЗАПУСКУ — Arbitrage Insights
+Крипто-фьючерсный арбитражный дашборд
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ТРЕБОВАНИЯ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  - Python 3.10 или выше (рекомендуется 3.11)
+  - Git
+  - Redis 7+ (опционально, но рекомендуется)
+  - ОС: Linux, macOS или Windows
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+РЕЖИМЫ РАБОТЫ — КРАТКИЙ ОБЗОР
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Режим А — Простой (один процесс)
+    Для: локальная разработка, первый запуск
+    Задержка обновления спредов: 3–10 секунд
+    Команда: python app.py
+
+  Режим Б — REST-коллектор (два процесса + Redis)
+    Для: 10–50 пользователей, стабильный продакшн
+    Задержка обновления спредов: 3–10 секунд
+    Команды: python collector.py  +  python app.py (COLLECTOR_ONLY=1)
+
+  Режим В — WebSocket-коллектор (рекомендуется для скальпинга)
+    Для: реалтайм обновления, скальпинг, 50+ пользователей
+    Задержка обновления спредов: 50–300 миллисекунд
+    Команды: python ws_collector.py  +  python app.py (COLLECTOR_ONLY=1)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+БЫСТРЫЙ СТАРТ — WINDOWS (двойной клик)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Дважды кликните файл run_dashboard.bat
+  Батник автоматически:
+    - создаст виртуальное окружение .venv
+    - установит все зависимости
+    - запустит дашборд на http://127.0.0.1:8000
+
+  Откройте браузер и перейдите по адресу: http://127.0.0.1:8000
+  Для остановки нажмите Ctrl+C в открывшемся окне консоли.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+БЫСТРЫЙ СТАРТ — macOS (двойной клик)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  В Finder откройте папку проекта.
+  Дважды кликните файл run_local.command
+
+  Если файл не запускается:
+    chmod +x run_local.command
+
+  Откройте браузер: http://127.0.0.1:8000
+  Для остановки нажмите Ctrl+C в терминале.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+РЕЖИМ А — РУЧНОЙ ЗАПУСК (Linux / macOS / Windows)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Шаг 1. Перейти в папку проекта:
+    Linux/macOS:  cd /путь/к/проекту
+    Windows:      cd C:\путь\к\проекту
+
+  Шаг 2. Создать виртуальное окружение:
+    Linux/macOS:  python3 -m venv .venv
+    Windows:      python -m venv .venv
+
+  Шаг 3. Активировать виртуальное окружение:
+    Linux/macOS:  source .venv/bin/activate
+    Windows cmd:  .venv\Scripts\activate
+    Windows PS:   .\.venv\Scripts\Activate.ps1
+
+    Если PowerShell блокирует скрипт:
+      Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+  Шаг 4. Установить зависимости:
+    pip install -r requirements.txt
+
+  Шаг 5. Запустить:
+    python app.py
+
+  Открыть в браузере: http://127.0.0.1:8000
+  Остановить: Ctrl+C
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+УСТАНОВКА REDIS (необходим для Режимов Б и В)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Ubuntu / Debian:
+    sudo apt update && sudo apt install -y redis-server
+    sudo systemctl start redis-server
+    sudo systemctl enable redis-server
+    redis-cli ping
+    Ожидаемый ответ: PONG
+
+  macOS (Homebrew):
+    brew install redis
+    brew services start redis
+    redis-cli ping
+
+  Windows:
+    Вариант 1 — Docker:
+      docker run -d --name redis -p 6379:6379 redis:7-alpine
+    Вариант 2 — MSI установщик:
+      https://github.com/microsoftarchive/redis/releases/latest
+
+  Проверка:
+    redis-cli ping
+    Ожидаемый ответ: PONG
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+РЕЖИМ Б — REST-КОЛЛЕКТОР (два процесса)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Требуется Redis (см. выше).
+
+  Терминал 1 — запустить коллектор:
+    Linux/macOS:
+      source .venv/bin/activate
+      REDIS_URL=redis://localhost:6379/0 python collector.py
+
+    Windows cmd:
+      .venv\Scripts\activate
+      set REDIS_URL=redis://localhost:6379/0
+      python collector.py
+
+    Windows PowerShell:
+      .\.venv\Scripts\Activate.ps1
+      $env:REDIS_URL = "redis://localhost:6379/0"
+      python collector.py
+
+  Терминал 2 — запустить API-сервер:
+    Linux/macOS:
+      source .venv/bin/activate
+      REDIS_URL=redis://localhost:6379/0 COLLECTOR_ONLY=1 python app.py
+
+    Windows cmd:
+      .venv\Scripts\activate
+      set REDIS_URL=redis://localhost:6379/0
+      set COLLECTOR_ONLY=1
+      python app.py
+
+  Открыть в браузере: http://127.0.0.1:8000
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+РЕЖИМ В — WEBSOCKET-КОЛЛЕКТОР (для скальпинга, задержка 50–300 мс)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Требуется Redis (см. выше).
+
+  Терминал 1 — запустить WS-коллектор:
+    Linux/macOS:
+      source .venv/bin/activate
+      REDIS_URL=redis://localhost:6379/0 python ws_collector.py
+
+    Windows cmd:
+      .venv\Scripts\activate
+      set REDIS_URL=redis://localhost:6379/0
+      python ws_collector.py
+
+  Дождитесь в логах строк:
+    [MEXC WS]  Connected — subscribing to all tickers
+    [Bybit WS] Connected — subscribing to NNN symbols
+    [BingX WS] Connected — subscribing to NNN symbols
+
+  Терминал 2 — запустить API-сервер:
+    Linux/macOS:
+      source .venv/bin/activate
+      REDIS_URL=redis://localhost:6379/0 COLLECTOR_ONLY=1 python app.py
+
+    Windows cmd:
+      .venv\Scripts\activate
+      set REDIS_URL=redis://localhost:6379/0
+      set COLLECTOR_ONLY=1
+      python app.py
+
+  Открыть в браузере: http://127.0.0.1:8000
+  Спреды обновляются каждые 50–300 мс — подходит для скальпинга.
+
+  Настройка частоты обновления (по умолчанию 300 мс):
+    Linux/macOS:
+      SNAPSHOT_THROTTLE_SEC=0.1 python ws_collector.py
+    Windows:
+      set SNAPSHOT_THROTTLE_SEC=0.1
+      python ws_collector.py
+    Значение 0.1 = 100 мс. Минимальное рекомендуемое значение: 0.05 (50 мс).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Переменная              По умолч.  Описание
+  ─────────────────────────────────────────────────────────────────────
+  REDIS_URL               (нет)      Адрес Redis: redis://localhost:6379/0
+  COLLECTOR_ONLY          0          1 = только API, не собирать данные
+  REFRESH_SEC             3          Интервал REST-цикла (секунды)
+  SNAPSHOT_THROTTLE_SEC   0.3        Минимальный интервал записи в Redis (WS)
+  LOG_LEVEL               INFO       INFO / WARNING / DEBUG / ERROR
+  LOG_FILE                (нет)      Путь к файлу лога (с авторотацией)
+  ARB_AUTH_KEY            (нет)      Ключ шифрования БД пользователей
+  TELEGRAM_BOT_TOKEN      (нет)      Токен бота из @BotFather
+  TELEGRAM_BOT_USERNAME   arbitrage… Username бота без @
+  ALLOWED_ORIGINS         (нет)      CORS домены через запятую
+  MAX_BINGX_SYMBOLS       260        Макс. количество символов BingX (REST)
+  MAX_BINGX_SYMS          200        Макс. количество символов BingX (WS)
+  ENV                     (нет)      development / production
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ПРОДАКШН НА LINUX-СЕРВЕРЕ (systemd)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Установить системные пакеты:
+       apt update && apt install -y python3.11 python3.11-venv git redis-server nginx
+
+  2. Запустить Redis:
+       systemctl enable --now redis-server
+
+  3. Создать виртуальное окружение и установить зависимости:
+       cd /путь/к/проекту
+       python3.11 -m venv .venv
+       source .venv/bin/activate
+       pip install -r requirements.txt
+       deactivate
+
+  4. Создать systemd сервис для API:
+       nano /etc/systemd/system/arbitrage.service
+
+     Вставить (замените /путь/к/проекту и токен бота):
+
+       [Unit]
+       Description=Arbitrage Insights Dashboard
+       After=network.target redis.service
+
+       [Service]
+       Type=simple
+       User=root
+       WorkingDirectory=/путь/к/проекту
+       ExecStart=/путь/к/проекту/.venv/bin/python app.py
+       Restart=always
+       RestartSec=5
+       Environment=ENV=production
+       Environment=REDIS_URL=redis://localhost:6379/0
+       Environment=COLLECTOR_ONLY=1
+       Environment=TELEGRAM_BOT_TOKEN=ВАШ_ТОКЕН_БОТА
+
+       [Install]
+       WantedBy=multi-user.target
+
+  5. Создать systemd сервис для WS-коллектора:
+       nano /etc/systemd/system/arbitrage-ws-collector.service
+
+     Вставить:
+
+       [Unit]
+       Description=Arbitrage WebSocket Collector
+       After=network.target redis.service
+
+       [Service]
+       Type=simple
+       User=root
+       WorkingDirectory=/путь/к/проекту
+       ExecStart=/путь/к/проекту/.venv/bin/python ws_collector.py
+       Restart=always
+       RestartSec=5
+       Environment=REDIS_URL=redis://localhost:6379/0
+       Environment=SNAPSHOT_THROTTLE_SEC=0.3
+       Environment=TELEGRAM_BOT_TOKEN=ВАШ_ТОКЕН_БОТА
+
+       [Install]
+       WantedBy=multi-user.target
+
+  6. Включить и запустить оба сервиса:
+       systemctl daemon-reload
+       systemctl enable --now arbitrage-ws-collector
+       systemctl enable --now arbitrage
+
+  7. Проверить статус:
+       systemctl status arbitrage-ws-collector
+       systemctl status arbitrage
+       curl -s http://localhost:8000/health
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NGINX — ОБРАТНЫЙ ПРОКСИ (порт 80)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Создать файл конфигурации:
+    nano /etc/nginx/sites-available/arbitrage
+
+  Вставить:
+
+    server {
+        listen 80;
+        server_name ваш-ip-или-домен;
+
+        location /events {
+            proxy_pass http://127.0.0.1:8000;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_buffering off;
+            proxy_read_timeout 3600;
+        }
+
+        location / {
+            proxy_pass http://127.0.0.1:8000;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 60;
+        }
+    }
+
+  Активировать:
+    ln -sf /etc/nginx/sites-available/arbitrage /etc/nginx/sites-enabled/
+    nginx -t
+    systemctl restart nginx
+
+  Открыть порты в файрволле:
+    ufw allow OpenSSH
+    ufw allow 80/tcp
+    ufw enable
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ПРОВЕРКА РАБОТОСПОСОБНОСТИ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Проверить сервер:
+       curl -s http://localhost:8000/health
+     Ожидаемый ответ: {"ok":true,"uptime_s":...,"rows_cached":...}
+     Если rows_cached > 0 — данные с бирж получены успешно.
+
+  2. Проверить данные:
+       curl -s http://localhost:8000/api/data | python3 -m json.tool | head -40
+
+  3. Просмотр логов:
+       journalctl -u arbitrage -f
+       journalctl -u arbitrage-ws-collector -f
+
+  4. Проверить Redis:
+       redis-cli keys "arb:*"
+     Должны быть ключи: arb:snap:guest, arb:snap:paid, arb:snap:admin
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ОБНОВЛЕНИЕ ПРОЕКТА
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  git pull
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  deactivate
+  systemctl restart arbitrage-ws-collector
+  systemctl restart arbitrage
+  sleep 3
+  curl -s http://localhost:8000/health
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ДОСТУП С ИНТЕРНЕТА (ngrok — для тестирования)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Установить ngrok: https://ngrok.com/download
+  Запустить: ngrok http 8000
+  Получить ссылку вида: https://abc12345.ngrok-free.app
+
+  Или использовать встроенный скрипт:
+    ./scripts/run_with_ngrok.sh
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ШПАРГАЛКА ПО КОМАНДАМ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Действие                        Команда
+  ──────────────────────────────────────────────────────────────────────
+  Статус API-сервиса              systemctl status arbitrage
+  Статус WS-коллектора            systemctl status arbitrage-ws-collector
+  Перезапустить оба               systemctl restart arbitrage-ws-collector arbitrage
+  Остановить всё                  systemctl stop arbitrage arbitrage-ws-collector
+  Логи API (последние 100)        journalctl -u arbitrage -n 100
+  Логи в реалтайме                journalctl -u arbitrage -f
+  Логи WS-коллектора              journalctl -u arbitrage-ws-collector -f
+  Проверить healthcheck           curl -s http://localhost:8000/health
+  Статус nginx                    systemctl status nginx
+  Перезапустить nginx             systemctl restart nginx
+  Проверить Redis                 redis-cli ping
+  Ключи Redis                     redis-cli keys "arb:*"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ЧАСТЫЕ ОШИБКИ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Ошибка: externally-managed-environment
+  Решение: создайте виртуальное окружение (python3 -m venv .venv)
+           и устанавливайте зависимости только в него.
+
+  Ошибка: ModuleNotFoundError: No module named 'aiohttp'
+  Решение: убедитесь что виртуальное окружение активировано:
+           source .venv/bin/activate
+
+  Ошибка: redis.exceptions.ConnectionError
+  Решение: запустите Redis: systemctl start redis-server
+           Или уберите REDIS_URL — без Redis работает in-memory.
+
+  Ошибка: rows_cached: 0 после старта
+  Решение: WS-коллектор только запустился — подождите 10–30 секунд
+           пока WebSocket-соединения установятся и придут первые данные.
+
+  Ошибка: bad unit file setting (systemd)
+  Решение: в файле .service нет комментариев (#) внутри блока [Service].
+           Удалите все комментарии из секции [Service].
+
+  Ошибка: Spread не обновляется быстро (задержка > 5 сек)
+  Решение: используйте ws_collector.py вместо collector.py.
+           REST-режим физически ограничен задержкой HTTP-запросов к биржам.
+
+================================================================================

@@ -3,102 +3,22 @@ let LAST_ALERT='';
 let cooldown=0; let timerId=null;
 // Read a <script type="application/json"> element by id (server-injected data)
 function _readJsonEl(id){try{const el=document.getElementById(id);return el?JSON.parse(el.textContent):null;}catch(_e){return null;}}
-// ── TimerHub: live per-exchange (+ per-symbol for MEXC) funding countdowns ──
+// ── Funding countdown: one global tick per second, independent of API polling ──
+// Timestamps are stored as data-next-funding-buy / data-next-funding-sell on each <tr>.
 const EMPTY_TIMER='--:--:--';
-const FUNDING_REFRESH_MS=60000;
-const TimerHub=(function(){
-  const subscribers=new Map();
-  // Cached end timestamps keyed by "exchange" or "exchange:symbol" for MEXC
-  const _exchangeTs=new Map();
-  function formatTime(sec){
-    sec=Math.max(0,Math.floor(sec));
-    const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;
-    return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
-  }
-  function _calcIntervalH(sec){const H=3600;return sec<H?1:sec<4*H+1800?4:8;}
-  function _updateIntervalEl(timerId,fundingInterval){
-    const ivlEl=document.getElementById(timerId.replace(/^timer-/,'ivl-'));
-    if(ivlEl&&fundingInterval)ivlEl.textContent=fundingInterval;
-  }
-  function subscribe(elementId,endTimeMs,exchange,symbol,fundingInterval,fallbackEta,onFinish=null){
-    const el=document.getElementById(elementId);
-    if(!el){return;}
-    const raw=Number(endTimeMs);
-    const now=Date.now();
-    const exKey=(exchange&&symbol)?`${exchange}:${symbol}`:exchange;
-    // Priority: row-level ts (most precise) > exchange cache (survives re-renders) > 0
-    const rowValid=Number.isFinite(raw)&&raw>now;
-    const cached=_exchangeTs.get(exKey)||0;
-    const endTimeUtc=rowValid?raw:(cached>now?cached:0);
-    el.textContent=endTimeUtc>now?formatTime(Math.floor((endTimeUtc-now)/1000)):(fallbackEta||EMPTY_TIMER);
-    if(fundingInterval)_updateIntervalEl(elementId,fundingInterval);
-    subscribers.set(elementId,{el,endTimeUtc,exchange,symbol,exKey,fundingInterval,fallbackEta,onFinish,finished:endTimeUtc<=now});
-    if(endTimeUtc>now)console.debug(`[TimerHub] subscribe id=${elementId} exKey=${exKey} remaining=${Math.floor((endTimeUtc-now)/1000)}s`);
-  }
-  function update(exchange,newEndTimeMs,symbol){
-    const now=Date.now();
-    const newTs=Number(newEndTimeMs);
-    const exKey=(exchange&&symbol)?`${exchange}:${symbol}`:exchange;
-    _exchangeTs.set(exKey,newTs);
-    for(const[id,sub] of subscribers){
-      if(sub.exKey!==exKey)continue;
-      sub.endTimeUtc=newTs;
-      sub.finished=false;
-      if(!sub.el.isConnected)continue;
-      const remaining=Math.max(0,Math.floor((newTs-now)/1000));
-      sub.el.textContent=newTs>now?formatTime(remaining):(sub.fallbackEta||EMPTY_TIMER);
-      _updateIntervalEl(id,sub.fundingInterval);
-    }
-    console.debug(`[TimerHub] update exKey=${exKey} newEnd=${newTs>0?new Date(newTs).toISOString():'invalid'}`);
-  }
-  function tick(){
-    const now=Date.now();
-    for(const[id,sub] of subscribers){
-      if(!sub.el.isConnected){subscribers.delete(id);continue;}
-      if(sub.endTimeUtc<=0){
-        // Show server-computed ETA while waiting for live timestamp
-        if(sub.fallbackEta&&sub.el.textContent===EMPTY_TIMER)sub.el.textContent=sub.fallbackEta;
-        continue;
-      }
-      const remaining=Math.max(0,Math.floor((sub.endTimeUtc-now)/1000));
-      sub.el.textContent=formatTime(remaining);
-      // Interval label doesn't change per-second; updated only in subscribe()/update()
-      if(remaining===0&&!sub.finished){sub.finished=true;if(sub.onFinish)sub.onFinish(sub.exchange,id);}
-    }
-  }
-  setInterval(tick,1000);
-  return{subscribe,update,formatTime};
-})();
-
-async function refreshFundingTime(exchange,symbol=''){
-  try{
-    let url=`/api/funding-next?exchange=${encodeURIComponent(exchange)}`;
-    if(symbol)url+=`&symbol=${encodeURIComponent(symbol)}`;
-    const resp=await fetch(url);
-    const data=await resp.json();
-    const ms=Number(data.nextFundingTime||0);
-    if(exchange==='MEXC')console.debug(`[TimerHub] MEXC funding-next sym=${symbol||'(none)'} ms=${ms} future=${ms>Date.now()}`);
-    if(ms>Date.now())TimerHub.update(exchange,ms,symbol);
-    else if(exchange==='MEXC')console.warn(`[TimerHub] MEXC nextFundingTime past/0 sym=${symbol||'(none)'}`);
-  }catch(err){console.error(`[TimerHub] refreshFundingTime failed for ${exchange}:`,err);}
-}
-function updateAllMexcSymbols(){
-  if(!STATE||!STATE.data||!STATE.data.rows)return;
-  const toMexcSym=sym=>sym.replace(/USDT$/,'')+'_USDT';
-  const syms=new Set();
-  STATE.data.rows.forEach(r=>{
-    if(r.buy_ex==='MEXC')syms.add(toMexcSym(r.symbol));
-    if(r.sell_ex==='MEXC')syms.add(toMexcSym(r.symbol));
+const rowMap=new Map();
+function _fmtTime(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}
+setInterval(function(){
+  const now=Date.now();
+  rowMap.forEach(function(tr){
+    const buyTs=Number(tr.dataset.nextFundingBuy)||0;
+    const sellTs=Number(tr.dataset.nextFundingSell)||0;
+    const spans=tr.querySelectorAll('[data-col="feta"] span');
+    if(spans[0])spans[0].textContent=buyTs>now?_fmtTime(Math.floor((buyTs-now)/1000)):EMPTY_TIMER;
+    if(spans[1])spans[1].textContent=sellTs>now?_fmtTime(Math.floor((sellTs-now)/1000)):EMPTY_TIMER;
   });
-  syms.forEach(s=>refreshFundingTime('MEXC',s));
-}
-function startFundingRefresh(exchanges){
-  exchanges.forEach(ex=>refreshFundingTime(ex));
-  setInterval(()=>{
-    exchanges.forEach(ex=>{try{refreshFundingTime(ex);}catch(_e){}});
-    try{updateAllMexcSymbols();}catch(_e){}
-  },FUNDING_REFRESH_MS);
-}
+},1000);
+
 // ────────────────────────────────────────────────────────────────────────────
 let STATE={config:null,data:null,pinned:new Set(JSON.parse(localStorage.getItem('pinnedPairs')||'[]')),theme:localStorage.getItem('theme')||'theme-classic',sound:(localStorage.getItem('soundOn')||'0')==='1',lang:localStorage.getItem('lang')||'ru',soundFile:localStorage.getItem('soundFile')||'sms.wav',assets:{logos:{},sounds:[]},sortKey:'spread',sortDir:'desc',token:localStorage.getItem('authToken')||'',user:null,publicKey:'',authMode:'login'};
 const I18N={
@@ -327,19 +247,35 @@ rows=applyFilters(rows);
 sortRows(rows);
 refreshSortIndicators();
 const tb=document.getElementById('tbody');
-if(!rows.length){tb.innerHTML=`<tr class="empty-row"><td colspan="10">${(I18N[STATE.lang]||I18N.ru).notFound}</td></tr>`; return;}
+[...tb.querySelectorAll('tr:not([data-key])')].forEach(tr=>tr.remove());
+if(!rows.length){rowMap.forEach(tr=>{if(tr.parentNode===tb)tb.removeChild(tr);}); const e=document.createElement('tr'); e.innerHTML=`<td colspan="10" class="empty-row">${(I18N[STATE.lang]||I18N.ru).notFound}</td>`; tb.appendChild(e); return;}
 const top=rows[0];
 const alertKey=`${top.symbol}|${top.buy_ex}|${top.sell_ex}|${(top.spread||0).toFixed(4)}`;
 if(alertKey!==LAST_ALERT){LAST_ALERT=alertKey; playAlert();}
 
 const split=(a,b,col='',lbl='')=>`<td class='split-cell mono' data-col='${col}' data-label='${lbl}'><div class='line'>${a}</div><div class='line'>${b}</div></td>`;
-const existingRows=new Map([...tb.querySelectorAll('tr[data-key]')].map(tr=>[tr.dataset.key,tr]));
-[...tb.querySelectorAll('tr:not([data-key])')].forEach(tr=>tr.remove());
+const currentKeys=new Set();
 rows.forEach(r=>{
   const rKey=pairKey(r);
+  currentKeys.add(rKey);
   const pin=isPinnedPair(r);
-  let tr=existingRows.get(rKey);
-  if(!tr){tr=document.createElement('tr'); tr.dataset.key=rKey;}
+  let tr=rowMap.get(rKey);
+  if(tr){
+    // Existing row: update only dynamic cells; keep timer spans intact to avoid flicker
+    tr.className=pin?'pinned':'';
+    if(!Number(tr.dataset.nextFundingBuy)||Number(tr.dataset.nextFundingBuy)<Date.now())tr.dataset.nextFundingBuy=r.buy_next_ts_ms||0;
+    if(!Number(tr.dataset.nextFundingSell)||Number(tr.dataset.nextFundingSell)<Date.now())tr.dataset.nextFundingSell=r.sell_next_ts_ms||0;
+    const fav=tr.querySelector('.fav'); if(fav){fav.textContent=pin?'★':'☆'; fav.onclick=()=>togglePinnedPair(r);}
+    const priceCell=tr.querySelector('[data-col="price"]'); if(priceCell){const ls=priceCell.querySelectorAll('.line'); if(ls[0])ls[0].textContent=fmtPrice(r.buy_ask); if(ls[1])ls[1].textContent=fmtPrice(r.sell_bid);}
+    const fundCell=tr.querySelector('[data-col="funding"]'); if(fundCell){const ls=fundCell.querySelectorAll('.line'); if(ls[0])ls[0].innerHTML=`${fmtPct(r.buy_funding,3)} / <span id="ivl-${rKey}-buy">${r.buy_funding_interval||'8h'}</span>`; if(ls[1])ls[1].innerHTML=`${fmtPct(r.sell_funding,3)} / <span id="ivl-${rKey}-sell">${r.sell_funding_interval||'8h'}</span>`;}
+    const fspreadCell=tr.querySelector('[data-col="fspread"]'); if(fspreadCell){fspreadCell.className=`mono ${fundingClass(r.funding_spread)}`; fspreadCell.textContent=fmtPct(r.funding_spread,3);}
+    const spreadCell=tr.querySelector('[data-col="spread"]'); if(spreadCell){const sp=spreadCell.querySelector('.spread-pill'); if(sp){sp.className=`spread-pill ${spreadClass(r.spread)}`; sp.textContent=fmtPct(r.spread,2);}}
+    const volCell=tr.querySelector('[data-col="vol"]'); if(volCell){const ls=volCell.querySelectorAll('.line'); if(ls[0])ls[0].textContent=fmtUsd(r.buy_vol); if(ls[1])ls[1].textContent=fmtUsd(r.sell_vol);}
+    tb.appendChild(tr);
+    return;
+  }
+  // New row: build full DOM once, register in rowMap so it is never recreated
+  tr=document.createElement('tr'); tr.dataset.key=rKey;
   tr.className=pin?'pinned':'';
   const lbuy=logoFor(r.buy_ex);
   const lsell=logoFor(r.sell_ex);
@@ -359,16 +295,13 @@ rows.forEach(r=>{
     <td data-col='graf' data-label=''><a class='btn' style='padding:4px 8px;font-size:12px' href='/graph?pair_key=${encodeURIComponent(pairKey(r))}' target='_blank' rel='noopener'>Grafic</a></td>
   `;
   tr.querySelector('.fav').onclick=()=>togglePinnedPair(r);
-  // Subscribe live countdowns AFTER innerHTML so spans exist in DOM
-  const toMexcSym=sym=>sym.replace(/USDT$/,'')+'_USDT';
-  const bSym=r.buy_ex==='MEXC'?toMexcSym(r.symbol):'';
-  const sSym=r.sell_ex==='MEXC'?toMexcSym(r.symbol):'';
-  TimerHub.subscribe(`timer-${rKey}-buy`, r.buy_next_ts_ms||0, r.buy_ex, bSym, r.buy_funding_interval||'', r.funding_eta_buy||'', ()=>refreshFundingTime(r.buy_ex,bSym));
-  TimerHub.subscribe(`timer-${rKey}-sell`,r.sell_next_ts_ms||0, r.sell_ex, sSym, r.sell_funding_interval||'', r.funding_eta_sell||'', ()=>refreshFundingTime(r.sell_ex,sSym));
+  // Store funding timestamps once; the global timer reads them every second
+  tr.dataset.nextFundingBuy=r.buy_next_ts_ms||0;
+  tr.dataset.nextFundingSell=r.sell_next_ts_ms||0;
   tb.appendChild(tr);
-  existingRows.delete(rKey);
+  rowMap.set(rKey,tr);
 });
-existingRows.forEach(tr=>tr.remove());
+rowMap.forEach((tr,key)=>{if(!currentKeys.has(key)&&tr.parentNode===tb)tb.removeChild(tr);});
 }
 
 let _lastDataEtag='';
@@ -448,9 +381,7 @@ async function boot(){
   if((STATE.assets.sounds||[]).includes(STATE.soundFile)){ss.value=STATE.soundFile;}
   else if((STATE.assets.sounds||[]).length){STATE.soundFile=STATE.assets.sounds[0]; ss.value=STATE.soundFile; localStorage.setItem('soundFile',STATE.soundFile);}
 
-  renderAuth(); renderExchangeFilters(); render(); updateAllMexcSymbols();
-  // MEXC per-symbol timers handled by updateAllMexcSymbols() — exchange-level has no effect
-  startFundingRefresh(['Bybit','BingX']);
+  renderAuth(); renderExchangeFilters(); render();
 
   let _sseActive=false;
   let _refreshInFlight=false;

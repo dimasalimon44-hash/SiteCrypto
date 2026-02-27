@@ -3,14 +3,14 @@
 Arbitrage Insights — Collector process
 =======================================
 Fetches exchange data (MEXC / Bybit / BingX) and writes pre-built
-JSON snapshots to Redis.  The API process (app.py with COLLECTOR_ONLY=1)
-reads from Redis and never calls exchange APIs directly.
+JSON snapshots to Redis.  The API process reads from Redis and never
+calls exchange APIs directly.
 
 Architecture:
   ┌──────────────────────────┐       Redis       ┌──────────────────────────┐
   │  collector.py            │ ─── arb:snap:* ──▶│  app.py (API)            │
-  │  (exchange fetch loop)   │ ─── arb:live   ──▶│  COLLECTOR_ONLY=1        │
-  │  updater_loop()          │ ─── arb:sse    ──▶│  _redis_sse_subscriber() │
+  │  (per-exchange tasks +   │ ─── arb:live   ──▶│  RUN_UPDATER=0           │
+  │   aggregator task)       │ ─── arb:sse    ──▶│  _redis_sse_subscriber() │
   └──────────────────────────┘                   └──────────────────────────┘
 
 Setup (2 systemd services or 2 terminal windows):
@@ -19,10 +19,10 @@ Setup (2 systemd services or 2 terminal windows):
   REDIS_URL=redis://localhost:6379/0 python collector.py
 
   # Service 2 — API (HTTP server, reads from Redis):
-  REDIS_URL=redis://localhost:6379/0 COLLECTOR_ONLY=1 python app.py
+  REDIS_URL=redis://localhost:6379/0 python app.py
 
 Single-process mode (original behaviour, no change needed):
-  python app.py            # starts both updater_loop AND HTTP server
+  RUN_UPDATER=1 python app.py    # starts per-exchange tasks AND HTTP server
 
 Benefits of split mode:
   - Collector CPU usage (exchange fetch + spread compute) is completely
@@ -42,8 +42,9 @@ from pathlib import Path
 # Make sure app.py module can be imported from the same directory
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Tell app.py's lifespan() NOT to start updater_loop (we start it here)
-os.environ["COLLECTOR_ONLY"] = "1"
+# Ensure the API lifespan does NOT start the per-exchange tasks (RUN_UPDATER defaults to 0)
+# The collector starts those tasks itself below via asyncio.create_task.
+os.environ.setdefault("RUN_UPDATER", "0")
 
 logger = logging.getLogger("collector")
 
@@ -51,7 +52,7 @@ logger = logging.getLogger("collector")
 async def main() -> None:
     import aiohttp  # noqa: PLC0415
 
-    # Lazy import after setting COLLECTOR_ONLY so lifespan() is safe
+    # Lazy import after env var is set so lifespan() is safe
     import app as _a  # noqa: PLC0415
 
     # ── Thread pool ──────────────────────────────────────────────────────
@@ -76,7 +77,11 @@ async def main() -> None:
 
     # ── Background tasks ─────────────────────────────────────────────────
     tasks = [
-        asyncio.create_task(_a.updater_loop(), name="updater"),
+        asyncio.create_task(_a._mexc_task(), name="mexc"),
+        asyncio.create_task(_a._bybit_task(), name="bybit"),
+        asyncio.create_task(_a._bingx_task(), name="bingx"),
+        asyncio.create_task(_a._aggregator_task(), name="aggregator"),
+        asyncio.create_task(_a._next_funding_task(), name="next-funding"),
         asyncio.create_task(_a._mexc_intervals_refresher(), name="mexc-intervals"),
     ]
     logger.info("Collector tasks started: %s", [t.get_name() for t in tasks])
