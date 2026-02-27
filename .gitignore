@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+users.db.enc
+auth_secret.key
+.env
+*.db
