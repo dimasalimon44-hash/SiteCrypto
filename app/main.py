@@ -204,6 +204,11 @@ async def _run_aggregation(
     _rebuild_data_cache(rows_out, cache_meta)
     asyncio.create_task(_rsnapshot_write())
     _broadcast_sse(json.dumps({"t": "upd", "at": cache_meta["updated_at"]}))
+    try:
+        from services.telegram_alerts import send_spread_alerts  # noqa: PLC0415
+        send_spread_alerts(rows_out)
+    except Exception:
+        pass
     return rows_out, cache_meta
 
 
